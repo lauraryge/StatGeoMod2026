@@ -1,0 +1,943 @@
+---
+title: "GLMs Lab: Count & Proportion Data"
+subtitle: "A full workflow with interpretation, diagnostics, and model simplification"
+author: "Laura Ryge Koch"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    self_contained: yes
+    toc: true
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,error = TRUE)
+set.seed(123)
+library(tidyverse)
+library(MASS)        # glm.nb, stepAIC
+```
+## Learning goals
+
+-   Choose and fit appropriate GLMs for **count** (Poisson / Negative Binomial) and **proportion** (Binomial / quasi-Binomial) data.\
+-   Interpret coefficients: **rate ratios** (counts) and **odds ratios** (proportions).\
+-   Assess fit via **deviance, dispersion**, residual diagnostics, and **model simplification** (LRT, AIC).\
+-   Make predictions and visualise with **ggplot2**.
+
+::: callout-note
+**What you’ll submit**:
+
+An HTML version of this exercise by the end of the practial session
+:::
+
+## Lab Timeline (2 hours)
+
+| Time | Activity |
+|---------------|---------------------------------------------------------|
+| 0:00–0:15 | **Introduction to GLMs** – recap linear model limits, why we need GLMs. |
+| 0:15–0:35 | **Exploratory Data Analysis (EDA)** – plotting counts and proportions with ggplot2. |
+| 0:35–1:05 | **Count data example (Negative Binomial GLM)**: simulate / load data, fit Poisson, check overdispersion, refit with `glm.nb()`, interpret coefficients, plot fitted vs observed. |
+| 1:05–1:25 | **Proportional data example (Binomial GLM)**: fit model using `glm(..., family=binomial)`, interpret log-odds & odds ratios, check residuals, plot fitted probabilities with CIs. |
+| 1:25–1:40 | **Model simplification & comparison**: use `anova()`, `drop1()`, and AIC for model selection. |
+| 1:40–1:50 | **Diagnostics**: residual vs fitted plots, dispersion checks, discussion of overdispersion and quasi families. |
+| 1:50–2:00 | **Wrap-up**: Key takeaways, when to use Poisson, Negative Binomial, Binomial/Quasi-Binomial, interpretation of multiplicative vs additive effects. |
+
+## Part A — Count data (≈ 60 min)
+
+### A1. Simulate “roadkills”-style counts
+
+::: {.alert .alert-info}
+**Task.**
+
+Create a simulation that generates synthetic bird count data based on three environmental predictors:
+
+1)  `OPEN.L`: Percentage of open land (0-100%)
+2)  `D.PAR`K`: Distance to nearest park (0-5000 meters)
+3)  `L.WAT.C`: Length of nearby watercourses (0-5 km)
+
+**Your Mission**
+
+***Step 1*: Set up the simulation parameters**
+
+Generate data for 600 observation sites
+Create realistic ranges for each predictor variable using appropriate random distributions
+
+***Step 2*: Define the ecological relationships**
+
+The true relationship follows this pattern:
+
+1)  More open land → fewer birds (coefficient: -0.010)
+2)  Greater distance to parks → fewer birds (coefficient: -0.00012)
+3)  More watercourse length → more birds (coefficient: +0.18)
+4)  Baseline log-abundance: 1.2
+
+***Step 3*: Generate realistic count data**
+
+Use the linear predictor to calculate expected abundance
+Add ecological realism by incorporating overdispersion ($\theta = 4$)
+Generate final bird counts using an appropriate count distribution
+
+***Step 4*: Organize and explore your data**
+
+Combine all variables into a clean data frame
+Examine the structure and summary of your simulated dataset
+:::
+
+```{r}
+# Simulate predictors
+# Step 1: Simulation setup
+set.seed(123)  # For reproducible results
+n <- 600       # Number of sites - 600
+
+# Step 2: Generate predictor variables
+OPEN.L <- runif(n, 0, 100)     # Hint: uniform distribution, 0 to 100
+D.PARK <- runif(n, 0, 5000)     # Hint: uniform distribution, 0 to 5000
+L.WAT.C <- runif(n, 0, 5)    # Hint: uniform distribution, 0 to 5
+
+# Step 3: Create the ecological model
+eta <- 1.2 - 0.010 * OPEN.L - 0.00012 * D.PARK + 0.18 * L.WAT.C # Linear predictor combining all effects
+                  # Beta_OPEN.L = 0.010
+                  # Beta_D.PARK = 0.00012
+                  # Beta_L.WAT.C = 0.18
+mu <- exp(eta) # Transform eta to expected count scale - because of link is log
+theta <- 4      # Overdispersion parameter (4)
+
+# Step 4: Generate observed counts
+TOT.N <- rnbinom(n, size = theta, mu = mu) # Hint: use a random negative binomial distribution
+
+# Step 5: Create final dataset merging TOT.N, OPEN.L, D.PARK, & L.WAT.C
+datC <- tibble(TOT.N, OPEN.L, D.PARK, L.WAT.C)
+glimpse(datC)
+```
+
+### A2. Poisson GLM, dispersion check, quasi-Poisson
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Fit a Poisson GLM as a baseline; compute dispersion. If dispersion >> 1, fit a quasi-Poisson to obtain robust SEs (note: no AIC for quasi-families).
+
+**Your Mission**
+
+***Step 1*: Fit a baseline Poisson GLM**
+
+Use your simulated bird count data (TOT.N) with all three environmental predictors to establish a starting model.
+
+***Step 2*: Check for overdispersion**
+
+Calculate the dispersion parameter by comparing residual deviance to degrees of freedom. A value >> 1 indicates overdispersion.
+
+***Step 3*:* Apply quasi-Poisson correction if needed**
+
+If overdispersion is detected, fit a quasi-Poisson model to obtain robust standard errors that account for extra variability.
+
+***Step 4*: Compare model results**
+
+Examine how overdispersion correction affects coefficient estimates, standard errors, and statistical significance
+
+:::
+
+```{r}
+# Fit Poisson GLM
+m_pois <- glm(TOT.N ~ OPEN.L + D.PARK + L.WAT.C, 
+              family = poisson(link = "log"), 
+              data = datC)
+
+# Examine the results
+summary(m_pois)
+
+# Calculate dispersion parameter
+disp_pois <- m_pois$deviance / m_pois$df.residual
+print(paste("Dispersion parameter:", round(disp_pois, 2))) #it's 1.64,it is over-dispersed
+
+# Fit quasi-Poisson GLM
+m_qp <- glm(TOT.N ~ OPEN.L + D.PARK + L.WAT.C, 
+            family = quasipoisson(link = "log"), 
+            data = datC)
+
+# Compare results
+summary(m_qp)
+
+# Extract coefficients and SEs
+pois_coef <- summary(m_pois)$coefficients[, 1:2]
+qp_coef <- summary(m_qp)$coefficients[, 1:2]
+
+# Create comparison
+comparison <- data.frame(
+  Predictor = rownames(pois_coef),
+  Poisson_Coef = pois_coef[, 1],
+  Poisson_SE = pois_coef[, 2],
+  QuasiPois_Coef = qp_coef[, 1],
+  QuasiPois_SE = qp_coef[, 2],
+  SE_Inflation = qp_coef[, 2] / pois_coef[, 2]
+)
+
+print(comparison)
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1)  **Model Selection**: When would you choose quasi-Poisson over Poisson? 
+
+*When there is over-dispersion in Poisson (which I see if the residual deviance greatly exceeds the degrees of freedom). Greatly meaning when it's close to being twice as big. But Alejo says that quasi-Poisson is shit..:) sorry for quoting you*
+
+2)  **Limitations**: Why can't you calculate AIC for quasi-families?
+
+*The quasi-Poisson family in GLMs does not have a proper probability distribution or likelihood function, which is a fundamental requirement for AIC calculation. To handle over-dispersion it estimates a dispersion parameter => no likelihood to put into the AIC formula. Restricted maximum likelihood*
+
+3)  **Alternatives**: What other approaches could handle overdispersion? (*Hint*: negative binomial)
+
+*You can fit a negative binomial model - this has a dispersion parameter, which is not the case for quasi-Poisson, and then allows you to do model comparison with AICs.*
+
+*Biological Interpretation:*
+
+1)  Which environmental factor has the strongest effect on bird counts?
+
+*It's very hard to say which factor has the strongest effect - they all have similar values*
+
+3)  How do you interpret the coefficient for `D.PARK`?
+
+*negative influence on bird counts - larger distance to parks = less birds*
+
+:::
+
+### A3. Negative Binomial GLM & comparison
+
+
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Fit a Negative Binomial GLM and compare to Poisson using AIC. Prefer NB if it provides a better likelihood-penalised fit.
+
+**Your Mission**
+
+***Step 1*: Fit a Negative Binomial GLM**
+
+Use the `glm.nb()` function to fit a negative binomial model that explicitly accounts for overdispersion by estimating a dispersion parameter.
+
+***Step 2*: Examine the model summary**
+
+Review the coefficient estimates, standard errors, and the estimated theta (dispersion) parameter to understand how NB differs from Poisson.
+
+***Step 3*: Compare models using AIC**
+
+Calculate AIC values for both Poisson and Negative Binomial models to determine which provides better model fit penalized for complexity.
+
+***Step 4*: Make an informed model choice**
+
+Select the preferred model based on AIC comparison and biological interpretability of results.
+:::
+
+```{r}
+library(MASS)  # Required for glm.nb()
+
+m_nb <- glm.nb(TOT.N ~ OPEN.L + D.PARK + L.WAT.C,
+              data = datC)
+summary(m_nb) # much lower residual deviance!!!!
+
+# Compare models using AIC
+AIC(m_pois, m_nb)
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+1. **Theta parameter**: What is the estimated theta ($\theta$) value in your negative binomial model? How does this compare to the true value ($\theta = 4$) used in your simulation?
+
+*($\theta$) = 4.6 in my NB model*
+
+2. **Standard errors**: Compare the standard errors between the Poisson and Negative Binomial models. Which model has larger standard errors and why?
+
+*poisson, because of larger deviance in residuals?*
+
+3. **AIC comparison**: Which model has the lower AIC value? What does this tell you about model fit?
+
+*NB, this model is better than poisson*
+
+4. **Coefficient interpretation**: Are the coefficient signs and magnitudes similar between Poisson and NB models? What does this suggest about the robustness of your ecological conclusions?
+
+*all of them are pretty small? I don't know what that means.*
+
+5. **Model choice**: Based on your AIC comparison, which model would you choose for inference and why?
+
+*Nb due to residual deviance is smaller, AIC is smaller than poisson*
+
+6. **Practical implications**: How might using the wrong model (Poisson vs. NB) affect your conclusions about which environmental factors significantly influence bird abundance?
+
+*they are not too different, so it would proabbly not matter very much in this case*
+:::
+
+### A4. Model simplification (drop-one, stepAIC)
+
+::: {.alert .alert-info}
+**Task.**
+
+Simplify the NB model: inspect drop-one Chi-square tests, then apply stepAIC to seek a parsimonious model.
+
+**Your Mission**
+
+***Step 1: Conduct drop-one tests***
+
+Use `drop1()` with Chi-square tests to evaluate the individual contribution of each predictor when removed from the full model.
+
+***Step 2: Apply automated model selection***
+
+Use `stepAIC()` to systematically search for the most parsimonious model by comparing AIC values across different predictor combinations.
+
+***Step 3: Examine the final simplified model***
+
+Review the summary of the selected model to understand which predictors were retained and their statistical significance.
+
+***Step 4: Interpret coefficients on the natural scale***
+
+Transform log-scale coefficients to rate ratios (multiplicative effects) for easier ecological interpretation.
+:::
+
+```{r}
+# Step 1: Perform drop-one Chi-square tests
+drop1(m_nb, test = "Chisq")    # Test individual predictor contributions
+
+# Step 2: Apply stepwise AIC model selection  
+
+m_nb_step <- stepAIC(m_nb, trace = FALSE)    # Find most parsimonious model
+                                          # trace = FALSE suppresses output
+
+# Step 3: Examine the simplified model
+summary(m_nb_step)    # Review final model structure and significance
+
+# Step 4: Calculate rate ratios (multiplicative effects)
+exp(coef(m_nb_step))    # Transform coefficients to natural scale
+                  # exp() converts log-effects to multiplicative effects
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+## Interpretation Questions
+
+1. **Drop-one results**: Which predictor(s) show the highest Chi-square values in the drop-one test? What does this indicate about their importance?
+
+*open land (103.8), it's the most important for bird counts. However, all predictors contribute significantly*
+
+2. **Model selection outcome**: Did stepAIC retain all three predictors, or was the model simplified? Which variables (if any) were dropped?
+
+*yes, kept everything*
+
+3. **AIC improvement**: Compare the AIC of the final stepped model with the original full model. Is there evidence that simplification improved the model?
+
+*almost the same. no evidence that it was improved*
+
+4. **Rate ratio interpretation**: Looking at the `exp(coef())` output, how do you interpret the multiplicative effects? For example, what happens to bird abundance for every 1% increase in open land?
+
+*OPEN.L = 0.988 -> Each 1% increase in open land reduces bird counts by ~1.2%*
+
+5. **Ecological significance**: Which environmental factor has the strongest multiplicative effect on bird abundance? How would you translate this into management recommendations?
+
+*Strongest ecological effect: L.WAT.C. Management recommendation: Protect and expand wetlands/water habitats to promote bird abundance. Minimize conversion to open, unvegetated land.*
+
+6. **Statistical vs. biological significance**: Are all retained predictors both statistically significant (p < 0.05) and ecologically meaningful? How do you distinguish between the two?
+
+*All predictors are statistically highly significant (p < 0.001). Biological meaning differs, e.g. D.PARK’s per-meter effect is tiny, but could be ecologically relevant at larger spatial scales.*
+:::
+
+### A5. Predictions (response scale) & CI plot
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Produce fitted means and 95% confidence bands on the response scale for a key covariate (hold others at medians); plot observed counts + fitted curve.
+
+**Your Mission**
+
+***Step 1: Create a prediction grid***
+
+Generate a sequence of values for your focal predictor (`OPEN.L`) while holding other predictors at their median values to isolate the effect of interest.
+
+***Step 2: Generate model predictions***
+
+Use the simplified model to predict bird counts across the range of open land percentages, including standard errors for uncertainty quantification.
+
+***Step 3: Transform predictions to response scale***
+
+Convert log-scale predictions and confidence intervals back to the count scale for meaningful interpretation.
+
+***Step 4: Create a publication-ready plot***
+
+Combine observed data points with model predictions and confidence bands to visualize the relationship.
+:::
+
+```{r}
+# Step 1: Create prediction grid for focal variable
+gridC <- tibble(
+  OPEN.L = seq(min(datC$OPEN.L), max(datC$OPEN.L), length.out = 300),  # Sequence of 300 elements from min to max OPEN.L
+  D.PARK = median(datC$D.PARK),                                        # Hold D.PARK at median value
+  L.WAT.C = median(datC$L.WAT.C, na.rm = TRUE)                       # Hold L.WAT.C at median value
+)
+
+# Step 2: Generate predictions with standard errors
+pl <- predict(m_nb_step, newdata = gridC, type = "link", se.fit = TRUE)        # Get link-scale predictions + SEs
+                                                                      # type = "link" gives log-scale
+                                                                      # se.fit = TRUE includes SEs
+
+# Step 3: Transform to response scale with confidence intervals
+gridC <- gridC |>
+  mutate(
+    mu = exp(pl$fit),                           # Transform fitted values to count scale
+    lo = exp(pl$fit - 1.96*pl$se.fit),        # Lower 95% CI boundary
+    hi = exp(pl$fit + 1.96*pl$se.fit)         # Upper 95% CI boundary
+  )
+
+# Step 4: Create the prediction plot
+ggplot(datC, aes(x=OPEN.L, y=TOT.N)) +                                         # Plot original data
+  geom_point(alpha = 0.4) +                                          # Add semi-transparent points
+  geom_ribbon(data = gridC, aes(x = OPEN.L, ymin = lo, ymax = hi), 
+              alpha = 0.2,
+              inherit.aes = FALSE) +                    # Add confidence band
+  geom_line(data = gridC, aes(x = OPEN.L, y = mu), 
+            linewidth = 0.5, inherit.aes = FALSE) +                  # Add fitted line
+  labs(title = "NB model: fitted counts vs % open land",
+       x = "Percentage open land",
+       y = "Prdicted bird counts") +                                # Add informative labels
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+1. **Prediction grid setup**: Why do we hold D.PARK and L.WAT.C at their median values when creating predictions for OPEN.L? What would happen if we used different values?
+
+*Answer here*
+
+2. **Link vs. response scale**: Why do we first predict on the "link" scale and then transform using `exp()`, rather than predicting directly on the response scale?
+
+*Answer here*
+
+3. **Confidence interval interpretation**: What do the confidence bands around the fitted line represent? How would you explain this to a non-statistician?
+
+*Answer here*
+
+4. **Ecological pattern**: Describe the relationship between open land percentage and bird counts shown in your plot. Does this match your biological expectations?
+
+*Answer here*
+
+5. **Model fit assessment**: Looking at how well the fitted line and confidence bands capture the observed data points, would you say this model provides a good fit? What might you look for to assess this?
+
+*Answer here*
+
+6. **Practical applications**: How could you use this plot to inform urban planning decisions about bird conservation?
+
+*Answer here*
+:::
+
+### A6. Diagnostics: residuals & influence
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Inspect deviance/Pearson residuals vs fitted and influence diagnostics. Look for structure (misspecification) and high-leverage points.
+
+**Your Mission**
+
+***Step 1: Extract diagnostic measures***
+
+Create a comprehensive dataset containing fitted values, residuals, and influence measures from your negative binomial model to assess model assumptions and identify problematic observations.
+
+***Step 2: Create residuals vs fitted plot***
+
+Plot deviance residuals against fitted values to check for patterns that might indicate model misspecification, non-linearity, or heteroscedasticity.
+
+***Step 3: Examine influence diagnostics***
+
+Create a leverage vs Cook's distance plot to identify observations that have high influence on model parameters or are potential outliers.
+
+***Step 4: Interpret diagnostic patterns***
+
+Assess whether the model adequately captures the data structure and identify any observations requiring further investigation.
+:::
+
+```{r}
+# Step 1: Extract all diagnostic measures into a tibble
+diag_nb <- tibble(
+  fitted  = fitted(m_nb),                          # Extract fitted values (predicted means)
+  devres  = residuals(m_nb, type = "response"),         # Extract deviance residuals
+  pearson = residuals(m_nb, type = "pearson"),         # Extract Pearson residuals  
+  hat     = hatvalues(m_nb),                       # Extract leverage values (diagonal of hat matrix)
+  cooks   = cooks.distance(m_nb)                   # Extract Cook's distance (influence measure)
+)
+
+# Step 2: Create deviance residuals vs fitted values plot
+ggplot(diag_nb, aes(x=fitted, y=devres)) +                      # Plot fitted vs deviance residuals
+  geom_hline(yintercept = 0, linetype = "dashed") +  # Add horizontal reference line at y=0 (dashed)
+  geom_point(alpha = 0.5) +                       # Add semi-transparent points (0.5)
+  geom_smooth(se = TRUE) +                         # Add smooth trend line without confidence bands
+  labs(title = "NB model: deviance residuals vs fitted", 
+       x = "Fitted values", 
+       y = "Deviance residuals") +                               # Add descriptive labels
+  theme_minimal()
+
+# Step 3: Create leverage vs Cook's distance plot
+ggplot(diag_nb, aes(x=hat, y=cooks)) +                      # Plot leverage vs Cook's distance
+  geom_point(alpha = 0.6) +                       # Add semi-transparent points (0.6)
+  labs(title = "NB model: leverage vs Cook's distance", 
+       x = "Leverage values", 
+       y = "Cook's distance") +                               # Add descriptive labels
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+1. **Residual types**: What's the difference between deviance and Pearson residuals, and why might we prefer deviance residuals for GLM diagnostics?
+
+*Pearson tells you how many “standard deviations” each observation is from the fitted mean. Deviance residuals measure how much each observation contributes to the model deviance and thereby directly relate to the likelihood that underlies GLMs, so they are the natural analogue of residuals in ordinary regression.*
+s
+2. **Residuals vs fitted interpretation**: In your deviance residuals plot, what pattern would indicate a well-fitting model? What patterns would suggest problems?
+
+*Answer here*
+
+3. **Reference line importance**: Why do we include a horizontal dashed line at y=0 in the residuals plot, and what does it represent?
+
+*Answer here*
+
+4. **Leverage interpretation**: What does high leverage indicate about an observation, and why should we be concerned about high-leverage points?
+
+*Answer here*
+
+5. **Cook's distance threshold**: Cook's distance measures overall influence. What general threshold is often used to identify potentially problematic observations, and why?
+
+*Answer here*
+
+6. **Diagnostic integration**: How would you use both plots together to identify the most concerning observations? What would be the "worst case" combination of leverage and Cook's distance?
+
+*Answer here*
+
+7. **Model adequacy assessment**: Based on your diagnostic plots, would you conclude that the negative binomial GLM adequately fits your simulated data? What evidence supports this conclusion?
+
+*Answer here*
+
+:::
+
+## Part B — Proportion data (≈ 50 min)
+
+### B1. Simulate estate-level infection data
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Generate grouped binary data (successes out of $n$) with one continuous predictor and one factor to mirror a typical proportion problem.
+
+**Your Mission**
+
+***Step 1: Set up simulation parameters***
+
+Define the number of estates to simulate (120) and create realistic ranges for your predictor variables that will influence infection rates.
+
+***Step 2: Generate predictor variables***
+
+Create a continuous predictor (proportion of open land) and a categorical predictor (fencing status) that will affect disease transmission patterns.
+
+***Step 3: Define sample sizes per estate***
+
+Simulate varying numbers of deer tested per estate to create realistic grouped data structure typical of field studies.
+
+***Step 4: Model disease probability***
+
+Use a logistic model to convert predictor effects into probabilities, incorporating realistic ecological relationships between habitat and disease transmission.
+
+***Step 5: Generate infection outcomes***
+
+Simulate the number of positive cases per estate based on the modeled probabilities and sample sizes, then organize into a complete dataset.
+:::
+
+```{r}
+# Step 1: Set simulation parameters
+N <- 120                                    # Number of estates to simulate (120)
+
+# Step 2: Generate predictor variables  
+OpenLand <- runif(N, 0, 0.9)            # Continuous: proportion open land (0 to 0.9)
+Fenced   <- rbinom(N, 0/1, 0.4)           # Binary: fencing status (0/1, 40% probability of fencing)
+
+# Step 3: Create varying sample sizes per estate
+n_samp <- sample(___:___, ___, replace = ___) # Sample sizes between 20-80 deer per estate
+                                              # replace = TRUE allows resampling
+
+# Step 4: Define logistic model for infection probability
+eta_p <- ___ - ___*OpenLand - ___*Fenced    # Linear predictor: intercept - 4.0*OpenLand - 1.8*Fenced
+p     <- plogis(___)                        # Convert to probability scale using logistic function
+
+# Step 5: Generate infection outcomes
+pos <- rbinom(___, size = ___, prob = ___)  # Number of positive cases per estate
+neg <- ___ - ___                            # Calculate number of negative cases
+
+# Step 6: Organize data into final tibble
+deer <- tibble(
+  OpenLand,                                 # Proportion open land per estate
+  Fenced = factor(___),                     # Convert to factor for analysis
+  n_samp,                                   # Sample size per estate  
+  pos,                                      # Number positive cases
+  neg,                                      # Number negative cases
+  prop = ___/___                           # Calculate observed proportion infected
+)
+
+glimpse(___)                               # Examine the structure of simulated data
+```
+
+### B2. Binomial GLM (cbind successes, failures)
+
+::: {.alert .alert-info}
+**Task.**
+
+Fit a Binomial GLM with a logit link using the counts (`cbind(pos, neg)`), then interpret odds ratios.
+
+**Your Mission**
+
+***Step 1: Set up the binomial response***
+
+Use `cbind()` to combine success and failure counts into the proper format for binomial GLM analysis with grouped data.
+
+***Step 2: Fit the binomial GLM***
+
+Apply logistic regression to model infection probability as a function of habitat (`OpenLand`) and management (`Fenced`) predictors.
+
+***Step 3: Examine model summary***
+
+Review coefficient estimates, standard errors, and statistical significance to understand predictor effects on the logit scale.
+
+***Step 4: Calculate odds ratios***
+
+Transform log-odds coefficients to odds ratios for more intuitive interpretation of effect magnitudes.
+:::
+
+```{r}
+# Step 1 & 2: Fit binomial GLM with grouped data
+m_bin <- glm(cbind(___, ___) ~ ___ + ___,   # Combine positive and negative cases
+                                            # Include both predictors
+             family = ___,                  # Use binomial family with logit link
+             data = ___)                    
+
+# Step 3: Examine the model summary
+summary(___)                                # Review coefficients, SEs, and significance tests
+
+# Step 4: Calculate odds ratios (exponentiate coefficients)
+exp(coef(___))                             # Transform log-odds to odds ratios
+                                            # Values > 1 increase odds
+                                            # Values < 1 decrease odds
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+1. **Response variable format**: Why do we use `cbind(pos, neg)` instead of just using the proportion `pos/n_samp` as the response variable?
+
+*Answer here*
+
+2. **Coefficient interpretation**: Looking at the summary output, what do the coefficient estimates represent, and why are they on the log-odds scale?
+
+*Answer here*
+
+3. **Statistical significance**: Are both OpenLand and Fenced statistically significant predictors? What does this tell us about disease transmission factors?
+
+*Answer here*
+
+4. **Odds ratio interpretation**: How do you interpret the odds ratios from `exp(coef(m_bin))`? For example, what does an odds ratio of 0.018 for OpenLand mean?
+
+*Answer here*
+
+5. **Fencing effect**: If the odds ratio for Fenced is approximately 0.165, how would you explain the protective effect of fencing to a wildlife manager?
+
+*Answer here*
+
+6. **Model assumptions**: What key assumptions does the binomial GLM make about our data, and why might these be reasonable for disease surveillance data?
+
+*Answer here*
+
+7. **Practical applications**: How could wildlife managers use these odds ratios to prioritize disease control efforts across different estate types?
+
+*Answer here*
+:::
+
+
+### B3. Overdispersion & quasi-Binomial
+
+::: {.alert .alert-info}
+**Task.**
+
+Check dispersion. If >> 1, fit a quasi-Binomial to get robust SEs; use `drop1(..., test="F")` for term assessment.
+
+**Your Mission**
+
+***Step 1: Calculate dispersion parameter***
+
+Assess whether the binomial model adequately captures the variance in your proportion data by comparing residual deviance to degrees of freedom.
+
+***Step 2: Interpret dispersion results***
+
+Determine if overdispersion is present and whether a quasi-binomial correction is needed for robust inference.
+
+***Step 3: Fit quasi-binomial model if needed***
+
+Apply quasi-binomial family to account for extra-binomial variation and obtain corrected standard errors.
+
+***Step 4: Compare models and test terms***
+
+Examine how overdispersion correction affects coefficient estimates and use appropriate $F$-tests for term significance.
+:::
+
+```{r}
+# Step 1: Calculate dispersion parameter
+disp_bin <- ___$deviance / ___$df.residual    # Ratio of residual deviance to df
+disp_bin                                       # Display dispersion estimate
+                                               # Value ≈ 1: good binomial fit
+                                               # Value >> 1: overdispersion present
+
+# Step 2: Fit quasi-binomial model to address overdispersion
+m_qb <- glm(cbind(___, ___) ~ ___ + ___, 
+            family = ___, 
+            data = ___)                        # Same model structure as binomial
+                                               # quasibinomial allows dispersion ≠ 1
+
+# Step 3: Examine quasi-binomial model summary
+summary(___)                                   # Compare SEs with original binomial model
+                                               # Coefficients should be identical
+                                               # Standard errors will be inflated
+
+# Step 4: Test term significance with F-tests
+drop1(___, test = "___")                      # Use F-tests instead of Chi-square
+                                               # Appropriate for quasi-families
+                                               # Assesses each term's contribution
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+1. **Dispersion parameter interpretation**: What is your calculated dispersion parameter? What does this value tell you about the adequacy of the binomial model?
+
+*Answer here*
+
+2. **Sources of overdispersion**: In real wildlife disease surveillance, what factors might cause overdispersion in infection proportions across estates?
+
+*Answer here*
+
+3. **Coefficient comparison**: Compare the coefficient estimates between your binomial and quasi-binomial models. Are they identical? Why or why not?
+
+*Answer here*
+
+4. **Standard error inflation**: How do the standard errors compare between the two models? Calculate the inflation factor for one of the predictors.
+
+*Answer here*
+
+5. **Test statistic choice**: Why do we use F-tests with `drop1()` for the quasi-binomial model instead of Chi-square tests used with regular binomial models?
+
+*Answer here*
+
+6. **Model selection implications**: If both models show similar p-values for predictors, which model would you choose for inference and why?
+
+*Answer here*
+
+7. **Practical decision making**: At what dispersion threshold would you switch from binomial to quasi-binomial modeling, and how would you explain this decision to a non-statistician?
+
+*Answer here*
+
+:::
+
+### B4. Prediction curves & confidence bands (probability scale)
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Produce fitted probability curves (and bands) across `OpenLand` for each fencing status; plot points (proportions) and fitted curves with `ggplot2`.
+
+**Your Mission**
+
+***Step 1: Create prediction grid***
+Generate a sequence of `OpenLand` values for both fencing levels to create smooth prediction curves across the full range of habitat conditions.
+
+***Step 2: Generate model predictions***
+Use the binomial model to predict infection probabilities on the link scale, including standard errors for uncertainty quantification.
+
+***Step 3: Transform to probability scale***
+Convert logit-scale predictions and confidence intervals to probabilities using the inverse logit function.
+
+***Step 4: Create comprehensive visualization***
+Combine observed proportions, fitted curves, and confidence bands to show model predictions for both fenced and unfenced estates.
+
+:::
+
+```{r}
+# Step 1: Create prediction grid for both fencing levels
+
+OpenLand_vals <- seq(min(deer$OpenLand), max(deer$OpenLand), length.out = 300) # Sequence from min to max OpenLand (300 points)
+newX <- tibble(
+  OpenLand = seq(min(___$OpenLand), max(___$OpenLand), length.out = ___), # Sequence  OpenLand_vals 2 times
+  Fenced   = factor(___:___, each = 300)) # Create factor levels for both 0 and 1
+)
+
+# Step 2: Generate predictions on link scale with standard errors
+pl_b <- predict(___, newdata = ___, type = "___", se.fit = ___)          # Predict on logit scale with SEs
+                                                                          # type = "link" gives logit scale
+                                                                          # se.fit = TRUE includes uncertainty
+
+# Step 3: Transform predictions to probability scale with confidence intervals
+newX <- newX |>
+  mutate(
+    prob = plogis(___$fit),                      # Transform fitted values to probability scale
+    lo   = plogis(___$fit - ___*___$se.fit),    # Lower 95% CI: subtract 1.96*SE before transforming
+    hi   = plogis(___$fit + ___*___$se.fit)     # Upper 95% CI: add 1.96*SE before transforming
+  )
+
+# Step 4: Create comprehensive prediction plot
+ggplot(___, aes(___, ___, colour = ___)) +                               # Plot observed proportions by fencing status
+  geom_point(alpha = ___) +                                              # Add semi-transparent data points (0.4)
+  geom_ribbon(data = ___, aes(x = ___, ymin = ___, ymax = ___, fill = ___),
+              alpha = ___, colour = NA, inherit.aes = FALSE) +           # Add confidence bands (alpha = 0.15)
+  geom_line(data = ___, aes(x = ___, y = ___, colour = ___),
+            linewidth = ___, inherit.aes = FALSE) +                      # Add fitted lines (linewidth = 1.1)
+  scale_y_continuous(limits = c(___, ___)) +                             # Set y-axis from 0 to 1
+  labs(title = "___: infection probability vs open land",
+       subtitle = "Solid lines = fitted probabilities; bands = 95% pointwise CIs",
+       x = "___", 
+       y = "___") +                                                      # Add descriptive labels
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+
+**Questions**
+
+
+1. **Prediction grid expansion**: Why do we create predictions for both fencing levels (0 and 1) rather than just holding one at its median like in previous examples?
+
+*Answer here*
+
+2. **Link vs probability scale transformation**: Explain why we predict on the "link" scale first, then transform with `plogis()`. What would happen if we predicted directly on the response scale?
+
+*Answer here*
+
+3. **Confidence band interpretation**: What do the ribbon areas around each fitted line represent? How should wildlife managers interpret these bands when making decisions?
+
+*Answer here*
+
+4. **Visual pattern assessment**: Describe the relationship between open land proportion and infection probability for both fenced and unfenced estates. How does fencing modify this relationship?
+
+*Answer here*
+
+5. **Data point distribution**: Looking at the scatter of observed proportions, do you notice any patterns in where the data points fall relative to the fitted lines? What does this suggest about model fit?
+
+*Answer here*
+
+6. **Practical management insights**: If a wildlife manager has limited resources and must choose between fencing or habitat modification (reducing open land), what does this plot suggest about the relative effectiveness of each strategy?
+
+*Answer here*
+
+7. **Uncertainty communication**: How would you explain the confidence bands to a wildlife manager who asks why the predictions have "error bars" and whether they can trust the fitted lines?
+
+*Answer here*
+
+:::
+
+### B5. Diagnostics & simplification
+
+::: {.alert .alert-info}
+
+**Task.**
+
+Inspect deviance residuals vs fitted; compare nested binomial models via deviance tests; report the simplified model.
+
+**Your Mission**
+
+***Step 1: Extract diagnostic measures***
+
+Create a comprehensive dataset with fitted values and residuals from your binomial model to assess model assumptions and fit quality.
+
+***Step 2: Create residuals diagnostic plot***
+
+Plot deviance residuals against fitted probabilities to identify patterns that might indicate model misspecification or poor fit.
+
+***Step 3: Fit nested models for comparison***
+
+Create a simplified model by removing one predictor to test whether all terms are necessary for adequate model performance.
+
+***Step 4: Conduct formal model comparison***
+
+Use likelihood ratio tests (deviance tests) to statistically compare nested models and determine if the full model is justified.
+:::
+
+```{r}
+# Step 1: Extract diagnostic measures from binomial model
+diag_b <- tibble(
+  fitted  = fitted(___),                     # Extract fitted probabilities (not log-odds)
+  devres  = residuals(___, type = "___"),    # Extract deviance residuals
+  pearson = residuals(___, type = "___")     # Extract Pearson residuals for comparison
+)
+
+# Step 2: Create diagnostic plot for residuals vs fitted
+ggplot(___, aes(___, ___)) +                 # Plot fitted probabilities vs deviance residuals
+  geom_hline(yintercept = ___, linetype = ___) +  # Add horizontal reference line at y=0 (dashed)
+  geom_point(alpha = ___) +                       # Add semi-transparent points (0.5)
+  geom_smooth(se = ___) +                         # Add smooth trend line without confidence bands
+  labs(title = "___: deviance residuals vs fitted",
+       x = "___", 
+       y = "___") +                               # Add descriptive axis labels
+  theme_minimal()
+
+# Step 3: Fit simplified nested model (example: remove Fenced)
+m_bin2 <- update(___, . ~ ___)                    # Create model with only OpenLand
+                                                  # update() modifies existing model formula
+
+# Step 4: Compare nested models using likelihood ratio test
+anova(___, ___, test = "___")                    # Compare simplified vs full model
+                                                  # test = "Chisq" for binomial GLMs
+                                                  # Tests if additional terms are significant
+```
+
+::: {.alert .alert-success}
+**Question**
+
+
+1. **Fitted values interpretation**: In the diagnostic plot, the x-axis shows "fitted probability" rather than fitted values on the link scale. Why is this choice appropriate for binomial GLM diagnostics?
+
+*Answer here*
+
+2. **Residual pattern assessment**: What pattern in your deviance residuals plot would indicate a well-fitting binomial model? What patterns would suggest problems?
+
+*Answer here*
+
+3. **Nested model comparison logic**: Why did we choose to remove the `Fenced` variable rather than `OpenLand` when creating the nested model? What strategy should guide this decision?
+
+*Answer here*
+
+4. **Likelihood ratio test interpretation**: Looking at your ANOVA output, what does the Chi-square test tell you about the importance of the removed predictor?
+
+*Answer here*
+
+5. **Model selection decision**: Based on your likelihood ratio test results, which model would you choose? How would you justify this choice to a wildlife manager?
+
+*Answer here*
+
+6. **Residual types comparison**: You extracted both deviance and Pearson residuals. For binomial GLMs, which type is generally preferred for diagnostic plots and why?
+
+*Answer here*
+
+7. **Sample size considerations**: Your data has 120 estates with varying numbers of deer tested per estate. How might this affect the interpretation of your residual patterns?
+
+*Answer here*
+
+8. **Biological vs. statistical significance**: Even if the likelihood ratio test shows statistical significance, how would you assess whether the removed predictor has practical importance for disease management?
+
+*Answer here*
+:::

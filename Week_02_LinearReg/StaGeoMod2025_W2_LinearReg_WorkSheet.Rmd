@@ -1,0 +1,594 @@
+---
+title: "Hands-on Practical: Linear Regression"
+author: "Laura Ryge Koch"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    self_contained: yes
+    toc: true
+    toc_depth: 3
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = TRUE)
+# Suggested packages for this practical (ggplot2-only plotting)
+# install.packages(c("AED", "ggplot2", "GGally", "broom", "dplyr"))
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(GGally)   # for ggpairs (ggplot2-based pairplot)
+# Let's read the data right way 
+Nereis <- read_table("Nereis.txt")
+```
+
+
+## Learning goals
+
+-   Distinguish correlation vs regression
+-   Build and interpret simple and multiple linear models
+-   Understand components, assumptions, diagnostics, and partial residuals
+-   Practice model simplification and reflect on uses & limitations
+
+## Timeline (2 hours)
+
+| **Time** | **Activity**. |
+|----------------------|-------------------------------------------------|
+| 0:00–0:20 | ggplot2 EDA: Cleveland (overall & by nutrient), box-plot, (ggpairs) |
+| 0:20–0:35 | Correlation vs regression; fit & plot simple LM |
+| 0:35–0:55 | Simple LM interpretation |
+| 0:55–1:15 | Multiple LM with factor; overlay lines |
+| 1:15–1:35 | ggplot2 diagnostics (residuals–fitted, QQ, scale–location) |
+| 1:35–1:55 | Partial residual plots (numeric + factor) |
+| 1:55–2:00 | Model simplification & limitations |
+
+## The data-set (5 min)
+
+The Nereis data-set is a classic example from marine benthic ecology, used to illustrate linear modelling approaches in R. It originates from experiments examining the role of the deposit-feeding polychaete *Hediste (Nereis) diversicolor* in nutrient generation in marine sediments.
+
+The data-set contains three variables:
+
+-   **`concentration`** – measured nutrient concentration (response variable).
+-   **`biomass`** – biomass of Nereis diversicolor (continuous predictor).
+-   **`nutrient`** – nutrient type (categorical factor with three levels: NH~4~-N, PO~4~-P, NO~3~-N).
+
+The experimental question was whether nutrient concentrations could be explained by the biomass of *Nereis diversicolor* and by nutrient type. It is widely used for teaching because it demonstrates how to build and interpret regression models that include both continuous and categorical predictors, while also highlighting issues such as heterogeneity of variance across groups.
+
+::: {.alert .alert-info}
+**Task: Load The data**
+
+*Step 1*: Load the Data set Read the data using the correct delimiter (here, tab-delimited):
+
+**Hint** you cloud use either the `read.table()`, `read_delim()`, or `read_table()` functions
+
+*Step 2*: Check Your Data Preview and summarise your data:
+
+**Hint**: To quickly explore your data, use `head()` to view the first few rows, `str()` to check the structure, and `summary()` to get an overview of each variable in the table.
+:::
+
+```{r}
+## Load the Dataset Read the data using the correct delimiter (here, tab-delimited): 
+Nereis <- read_delim("Nereis.txt",
+                          delim = "\t",
+                          col_names = TRUE,
+                          na = c("", "NA")
+                          )
+Nereis # tells this is a table
+
+## Check Your Data Preview and summarise your data:
+head(Nereis)      # Shows the first few rows
+str(Nereis)       # Shows the structure
+summary(Nereis)   # Gives summary statistics
+
+
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Describe the Dataset?
+
+    [This dataset consist of numeric values for nutrient concentration, biomass of Nerisis, and nutrient type (3 different kinds). The data has 45 rows.]{.underline}
+    
+    
+:::
+
+------------------------------------------------------------------------
+
+## Data exploration with ggplot2 (20 min)
+
+### Cleveland dotplot (overall)
+
+::: {.alert .alert-info}
+**Task: Cleveland dotplot**
+
+
+Recreate a Cleveland dotplot of concentration (each point = one observation). A **Cleveland dotplot** places a dot for each observation along a numerical scale, usually the x-axis, with the order of cases (observations) along the y-axis. It Helps detect outliers (extremely high or low points), and is useful for comparing variation across categories.
+
+**Hint**: create a row index and plot concentration vs index using `geom_point()` and `coord_flip()`.
+:::
+
+```{r}
+### Create a variable named obs that has the row number for a observation
+Nereis <- Nereis |> arrange(concentration) |> mutate(obs = row_number()) # use row_number() to tell which number of observation, so I can check for outliers in concentration
+Nereis
+### Make the Cleveland dotplot
+ggplot(Nereis, aes(x = obs, y = concentration )) +
+geom_point() +
+   #coord_flip() +
+   labs(x = "Order of observations", y = "Concentration",
+        title = "Cleveland dotplot (ggplot2)") +
+   theme_bw()
+```
+
+### Cleveland dotplot grouped by nutrient
+
+::: {.alert .alert-info}
+**Task: Cleveland dotplot grouped by **
+
+Group by nutrient (as factor), facet by nutrient, and use `geom_point()`.
+:::
+
+```{r}
+### Turn the variable nutrient into a factor
+Nereis <- Nereis |> mutate(nutrient = as.factor(nutrient)) #to say that it is a class and not a number
+Nereis$nutrient
+
+#can also do this:
+# factor(Nereis$nutrient,
+#        levels=1:3,
+#        labels=c("low","medium","high"))
+
+summary(Nereis) # now it shows 15 observation per level
+
+### Make the Cleveland dotplot
+ ggplot(Nereis, aes(x = obs , y = concentration )) +
+   geom_point(aes(shape = nutrient)) +
+   coord_flip() +
+   facet_wrap(~ nutrient, # grouping by nutrient treatment 
+              scales = "free_y") +
+   labs(x = "Order of observations", y = "Concentration",
+        title = "Cleveland dotplot by nutrient") +
+   theme_bw()
+```
+
+### Box-plot of concentration by nutrient
+
+::: {.alert .alert-info}
+**Task: Box-plot of concentration by nutrient**
+
+Make a box-plot for concentration by nutrient
+
+:::
+```{r}
+ggplot(Nereis, aes(x = nutrient, y = concentration )) +
+  geom_boxplot(width = 0.7) +
+  labs(x = "Nutrient", y = "Concentration",
+       title = "Boxplot of concentration by nutrient") +
+  theme_bw()
+```
+
+### Pair-plot (ggplot2-based)
+
+::: {.alert .alert-info}
+**Task: Pair-plot**
+
+Use `GGally::ggpairs` (built on `ggplot2`) to visualize bivariate relations. This exploration focus on assessing possible heterogeneity among nutrients and presence/absence of outliers.
+
+:::
+
+```{r}
+GGally::ggpairs(
+  Nereis |> select(concentration, #concentration
+                   biomass, #biomass
+                   nutrient),#nutrient
+  mapping = aes(colour = nutrient),
+  columns = 1:3)
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Do you see heterogeneity among nutrients?
+
+    [Yes]{.underline}
+
+2.  How you see (or don't) this?
+
+    [There are differences in concentrations]{.underline}
+    
+:::
+
+------------------------------------------------------------------------
+
+## Correlation vs Regression (15 min)
+
+::: {.alert .alert-info}
+**Task: Correlation vs Regression**
+
+Compute the correlation between `concentration` and `biomass`, then fit a simple linear model and overlay the regression line.
+
+:::
+```{r}
+### Compute the correlation
+cor(Nereis$concentration , #concentration,
+    Nereis$biomass , #biomass,
+    use = "complete.obs")
+
+### Simple regression fit:
+mod_simple <- lm(concentration ~ biomass,
+                 data = Nereis)
+summary(mod_simple)
+
+### Plot data + fitted line (ggplot2):
+ggplot(Nereis, aes(x = biomass,
+                   y = concentration)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(title = "Correlation vs Regression: line of best fit",
+       x = "Biomass", y = "Concentration") +
+  theme_bw()
+
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  What is the difference between the correlation and regression assessment of linkages between `concentration` and `biomass`.
+
+    [Correlation is the strength and direction of the relationship and regression is an explicit model of how the one variable depends on the other ]{.underline}
+    
+    
+:::
+
+## Simple linear regression (20 min)
+
+::: {.alert .alert-info}
+**Task: Simple linear regression**
+
+Fit a model that represent ($\text{concentration} \sim \text{biomass}$) and extract the model coefficients and performance metrics.
+
+**Hint**: Use the `summary()` function from Base R or the `tidy()` function from the `broom` package to extract the model coefficients and performance metrics.
+:::
+
+```{r}
+
+### Build the simple regresion
+mod_simple <- lm( concentration ~ biomass , data = Nereis)
+
+### Extract the model coefficients
+summary(mod_simple)$coef
+
+broom::tidy(mod_simple)
+
+knitr::kable(summary(mod_simple)$coef)
+
+### Extract the model performance metrics (R-sqr, adj-R-sqr, AIC, BIC, F-test)
+str(summary(mod_simple))
+
+r.squared = summary(mod_simple)$r.squared
+adj.r.squared = summary(mod_simple)$adj.r.squared
+AIC = AIC(mod_simple)
+BIC = BIC(mod_simple)
+Ftest = summary(mod_simple)$fstatistic 
+
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Interpret the intercept ($\beta_0$):
+
+    [when biomass is 0, the model predicts the response to be about 1.06 units]{.underline}
+    
+
+2.  Interpret the slope ($\beta_{\text{biomass}}$):
+
+    [for every 1-unit increase in biomass, the response variable increases on average by 0.21 units (always sholding everything else constant)]{.underline}
+    
+
+3.  Interpret the ($p$)-value of the coefficient:
+
+    [not statistcally significant(p=0.34)]{.underline}
+    
+
+4.  Interpret the ($p$)-value of the $F$-test:
+
+    [With p ≈ 0.92, the model is not significant, suggesting that biomass does not improve prediction of the response variable compared to just using the mean]{.underline}
+    
+
+5.  Interpret the ($R^2$): 
+
+    [The model explains only about 41,4% of the variance in the response variable]{.underline}
+    
+:::
+
+------------------------------------------------------------------------
+
+## Multiple regression with a categorical predictor (20 min)
+
+::: {.alert .alert-info}
+**Task: Multiple regression with a categorical predictor**
+
+Expand your original model so that it includes `nutrient` as a co-variate: ($\text{concentration} \sim \text{biomass} + \text{nutrient}$), and extract the model coefficients and performance metrics.
+
+:::
+
+```{r}
+
+### Build the simple regresion
+mod_multi <- lm(concentration ~ biomass + nutrient, data = Nereis)
+
+### Get the summary of the model
+summary(mod_multi)
+
+### Extract the model coefficients
+summary(mod_multi)$coef
+
+### Extract the model performance metrics (R-sqr, adj-R-sqr, AIC, BIC, F-test)
+r.squared = summary(mod_multi)$r.squared
+adj.r.squared = summary(mod_multi)$adj.r.squared
+AIC = AIC(mod_multi)
+BIC = BIC(mod_multi)
+Ftest = summary(mod_multi)$fstatistic 
+```
+
+::: {.alert .alert-info}
+**Task: Multiple regression with a categorical predictor**
+
+
+Visualize adjusted relationships (effect of biomass across nutrient levels):
+:::
+
+```{r}
+
+### Plot the relations between concentration and biomass coulring the points and relations by nutrient
+ggplot(Nereis,
+       aes(x = biomass, # the contionous covariate
+           y = concentration, # The resposne
+           colour = nutrient # The grouping variable
+           )) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Multiple regression: concentration ~ biomass + nutrient",
+       x = "Biomass", y = "Concentration") +
+  theme_bw()
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Describe in text from what the coefficients of this multiple regression describe.
+
+    [The model shows that biomass has a small, non-significant positive effect on the response. Nutrient2 has a significant positive effect (compared to nutrient1 which is the reference), while nutrient3 shows a negative but non-significant effect. The intercept indicates that the baseline response (biomass = 0, nutrient1) is positive and significant.]{.underline}
+    
+    
+2.  What is the plot representing that the model specification is no stating?
+
+    [the plot is representing the actual data structure and deviations from model assumptions]{.underline}
+    
+:::
+
+## Assumptions & diagnostics in ggplot2 (20 min)
+
+::: {.alert .alert-info}
+**Task: Assumptions & diagnostics in ggplot2**
+
+Build ggplot2 versions of standard diagnostics using
+
+**Hint**: you can use the `broom::augment()` to add the `fitted`, `residuals`, `std.resid` to the data table.
+:::
+
+```{r}
+
+###Crate a Dataset with fitted values, residuals, and standarzied residuals
+aug <- Nereis|> mutate(.fitted = predict(mod_multi),## Add the fitted values to Nereis
+                    .resid = residuals(mod_multi),## Add the residuals to Nereis
+                    .std.resid = rstandard(mod_multi) ## Add the Standarized residuals to Nereis
+                    )
+
+### Residuals vs fitted
+ggplot(aug, aes(x = .fitted,
+                y = .resid)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_point() +
+  labs(title = "Residuals vs Fitted", x = "Fitted values", y = "Residuals") +
+  theme_bw()
+
+### Scale-Location (spread vs fitted): sqrt(|standardized residuals|)
+ggplot(aug, aes(x = .fitted,
+                y = sqrt(abs(.std.resid)))) +
+  geom_point() +
+  geom_smooth(se = FALSE) +
+  labs(title = "Scale-Location", x = "Fitted values",
+       y = expression(sqrt("|Standardized residuals|"))) +
+  theme_bw()
+
+# QQ plot (ggplot2)
+qq <- augment(mod_multi,
+              data = Nereis) |>
+  mutate(theoretical = qqnorm(.std.resid, plot.it = FALSE)$x) |>
+  mutate(sample = sort(.std.resid))
+
+ggplot(qq, aes(x = theoretical,
+               y = sample)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = 2) +
+  labs(title = "Normal Q–Q (standardized residuals)",
+       x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_bw()
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Do you see non-linearity?, Why (Yes/No)?
+
+    [I guess? don't know.. help ]{.underline}
+    
+    
+2.  Do you see heteroscedasticity?, Why (Yes/No)?
+
+    [no, there is a trend in the residuals vs. fitted values plot]{.underline}
+    
+    
+3.  Strong departures from normality?, Why (Yes/No)?
+
+    [yes, std. residuals are not normaly distributed in the QQ plot]{.underline}
+:::
+
+------------------------------------------------------------------------
+
+## Partial residual plots in ggplot2 (20 min)
+
+::: {.alert .alert-info}
+**Task: Partial residual plots in ggplot2**
+
+Plot ($r^{(j)}$) vs ($x_j$) with a linear smooth to visualize the adjusted relationship ￼.
+
+**Concept**: for predictor ($x_i$), a partial residual is ($r_i^{(j)} = \hat{\varepsilon}_i + \hat{\beta}j x{ij}$).
+
+Below is a helper that returns a tibble for a given predictor:
+:::
+
+```{r}
+partial_residual_df <- function(mod, data, var){
+  stopifnot(var %in% colnames(model.matrix(mod)))
+  b <- coef(mod)[var]
+  aug <- augment(mod, data = data)
+  # For factors, var name in model.matrix includes level; handle numeric var first:
+  if(!is.numeric(data[[var]]) && var %in% names(data)){
+    stop("This simple helper expects a numeric predictor. For factors, see the next chunk.")
+  }
+  aug |>
+    mutate(
+      xj = data[[var]],
+      partial_resid = .resid + b * xj
+    )
+}
+```
+
+### Partial residual for a numeric predictor: biomass
+
+::: {.alert .alert-info}
+**Task: Partial residual for a numeric predictor: biomass**
+
+Estimate and plot the Partial residual for `biomass`.
+
+:::
+
+```{r}
+pr_biomass <- partial_residual_df(mod_multi, # Model
+                                  Nereis, #Dataset,
+                                  "biomass" #Continous variable
+                                  )
+ggplot(pr_biomass,
+       aes(x = xj, # xj,
+           y = partial_resid) #partial_resid
+           ) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Partial residual plot: biomass",
+       x = "Biomass",
+       y = expression(epsilon[i] + hat(beta)[biomass] %.% biomass[i])) +
+  theme_bw()
+```
+
+## Understanding model output (15 min)
+
+::: {.alert .alert-info}
+**Task: Understanding model output**
+
+Extract model coefficients and performance metrics from the `mod_multi` model.
+
+**Hint**: Use `broom::tidy()` and `broom::glance()` to structure the output for interpretation:
+:::
+
+```{r}
+
+### Build the simple regresion
+mod_multi <- lm(concentration ~ biomass + nutrient, data = Nereis)
+
+### Get the summary of the model
+summary(mod_multi)
+
+### Extract the model coefficients
+broom::tidy(mod_multi)
+
+### Extract the model performance metrics (R-sqr, adj-R-sqr, AIC, BIC, F-test)
+broom::glance(mod_multi)
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Write a one line interpretation of the **Coefficients** (estimates, SEs, $t$-values, $p$-values)
+
+    [The intercept (0.87, p = 0.003) is significant; biomass has a small positive but non-significant effect (0.21, p = 0.23); nutrient2 shows a significant positive effect (+1.07, p = 0.001); nutrient3 shows a negative but non-significant effect (–0.48, p = 0.12)]{.underline}
+    
+    
+2.  Write a one line interpretation of the **Goodness of fit**: $R^2$, Adjusted $R^2$, Residual SE
+
+    [The model explains about 41% of the variance in concentration (R² = 0.41, adj. R² = 0.37), with residual standard error (sigma) of 0.83, which indicates that other factor also explain the variation]{.underline}
+    
+3.  Write a one line **Inference caveat**: validity hinges on assumptions (linearity, homoscedasticity, independence, normal errors)
+
+    [These results are only valid if model assumptions (linearity, independence, homoscedasticity, and normality of errors) are reasonably satisfied, which is not really the case here (as I understood it in class)]{.underline}
+    
+:::
+
+------------------------------------------------------------------------
+
+## Model simplification (15 min)
+
+::: {.alert .alert-info}
+**Task: Model simplification**
+
+Try backward elimination with AIC of a model with both single and interaction effects between `biomass` and `nutrient`.
+
+**Hint**: You can use the `step()` function to do forward, backward, or step-wise model selection - this is based on a likelihood test for the full model vs the model without a variable.
+:::
+
+```{r}
+
+### Build a model with biomass, nutrient, and its interaction as covariates
+mod_multi_full <- lm(concentration ~ biomass * nutrient,
+                     data = Nereis)
+### Print the summary
+summary(mod_multi_full)
+
+### Run a backward parameter selection process using the AIC criteria
+mod_step <- step(mod_multi_full,
+                 direction = "backward",
+                 trace = 0)
+#3# Print the summary
+summary(mod_step)
+
+### Extract model performance of the reduce model
+broom::glance(mod_step)
+
+```
+
+::: {.alert .alert-success}
+**Question**
+
+1.  Compare coefficients and fit to `mod_multi`.
+
+    [it removes everything (intercept only one left), don't know if that should be the case? if so, it suggests that, by AIC’s criterion, biomass and nutrient don’t add enough predictive power. In mod_multi, biomass had a small (non-significant) effect, nutrient2 was significant, and fit was moderate (R² = 0.41). In mod_step, there are no predictors left, R² = 0, and the model just predicts the overall mean (1.28), so the simplified model fits much worse (explains nothing?)]{.underline}
+    
+2.  Discuss potential over fitting and parsimony.
+
+    [The full interaction model risks overfitting with too many parameters for 45 observations. Parsimony favors intercept-only model, however, this is overly simplistic. The simpler main-effects model (mod_multi) seams to be the best, as it captures variation without unnecessary complexity]{.underline}
+    
+:::
+
+------------------------------------------------------------------------
+
+## Uses & limitations (wrap-up, 10–15 min)
+
+*Remember*
+
+**Regression Analysis Strengths**: interpretability; hypothesis testing; prediction within scope. **Regression Analysis Limitations**: sensitive to assumption violations, collinearity; can miss nonlinear structure; independence often doubtful in ecology.
+
+

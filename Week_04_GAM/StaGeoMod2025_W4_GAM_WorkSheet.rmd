@@ -1,0 +1,727 @@
+---
+title: "Hands-on Practical: Generalised Additive Models (GAMs) with Bioluminescence"
+subtitle: "StatGeoMod2025 — 1.5-hour practical"
+author: "Laura Ryge Koch"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    self_contained: yes
+    toc: true
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup
+
+```{r}
+#| label: setup
+#| include: true
+#| eval: true
+#| echo: false
+#| message: false
+
+# Runng options
+knitr::opts_chunk$set(echo = TRUE,error=TRUE)
+
+# Packages
+library(tidyverse)
+library(mgcv)
+library(broom)
+library(patchwork)
+
+# Data: ISIT 
+ISIT <-  read_table("ISIT.txt")
+
+# For reproducibility
+set.seed(123)
+
+
+
+
+```
+
+## Part A — Why GAMs? (Basics & intuition) (10 min)
+
+::: {.alert .alert-info}
+**Task A1 (concept).**
+
+A GAM replaces a single global slope with a **smooth function** $f(x): Y_i = \alpha + f(X_i) + \varepsilon_i$.
+
+In `mgcv`, `s(x)` builds $f(x)$ from spline bases, and smoothness is selected automatically (REML/GCV).
+:::
+
+::: {.alert .alert-info}
+**Task A2 (visual).**
+
+**What you’ll do (and why):**
+
+1. **Prepare the data.** Select only Station 16 from the ISIT dataset and create a clean dataframe with three variables: `Station`, `Depth`, and `Sources`.  
+2. **Inspect the structure.** Use `glimpse()` to confirm that `Depth` is numeric (continuous predictor) and `Sources` is count data (non-negative integers). This step helps you check if the data type matches the modelling assumptions later.  
+3. **Visualise.** Make a scatterplot of Sources vs Depth using `ggplot2`. Adjust the transparency (`alpha = 0.7`) to help visualise overlapping points. Add informative labels and a minimal theme.  
+4. **Interpret.** After plotting, pause to describe what you see:  
+   - Is the pattern approximately linear, or clearly non-linear?  
+   - Are there regions of the depth gradient where Sources increase, peak, or decline?  
+   - Would fitting a straight line capture the overall shape, or would it miss important features?  
+
+This visual exploration sets the stage for why GAMs are needed: we often encounter curved, irregular, or locally varying relationships that polynomials or linear fits cannot capture well.
+:::
+
+```{r}
+## Fill in the blanks (`___`) in the code below.
+#| label: A2-plot
+# Prepare Station 16
+dat <- ISIT |>
+  dplyr::filter(Station == 16) |>
+  transmute(Station,
+            Depth   = SampleDepth,
+            Sources = Sources)
+
+# Quick look
+glimpse(dat)
+
+# Visualise
+ggplot(dat, aes(x=Depth, y=Sources)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Bioluminescence vs Depth (Station 16)",
+       y = "Sources") +
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+**Questions**.
+
+* What overall pattern do you see in the scatterplot? 
+*Decreases until a point where it flattens out.*
+* If you fitted a straight line here, what would it capture well, and what would it miss?
+*I would capture the beginning of the decrease in bioluminescence, but not the quick decrease from depth from 0-3000.*
+* Can you identify parts of the depth range where the relationship changes direction (e.g., rises then falls)?
+*From depth 1000-1500 it looks like it rises. In general it goes a bit up and down but the change is smaller with higher depth*
+* How might this motivate the need for flexible smoothers in GAMs?
+*I guess we wouldn't see these small fluctuations without flexible smoothers*
+:::
+
+## Part B — First GAM vs Polynomial (Runge motivation) (20 min)
+
+::: {.alert .alert-info}
+**Task B1 — Fit your first GAM (cubic regression spline)**
+
+**What you’ll do (and why):**
+
+- **Model:** Fit a GAM to `Sources ~ s(Depth)` using a **cubic regression spline** (`bs = "cr"`).  
+- **Smoothing selection:** Use **REML** (`method = "REML"`) so the model estimates the amount of smoothing (λ) automatically—balancing wiggliness and over-penalisation.  
+- **Complexity (edf):** Inspect **effective degrees of freedom (edf)** in `summary()` to gauge curve flexibility ($\approx$ 1 is almost linear; larger edf = more curvature).  
+- **Diagnostics:** Use `gam.check()` to examine residual patterns, QQ plot, scale–location, and the **k-index** (basis adequacy). A **low k-index** suggests increasing `k` (the basis dimension) and refitting.  
+- **Outcome:** You’ll see how GAMs adapt to the clear non-linearity in the bioluminescence vs depth relationship (Station 16) without resorting to high-degree polynomials.
+
+**Hints for robust modelling:**
+- Start with the default `k` (mgcv chooses a sensible basis size), then **only** increase it if `gam.check()` warns (k-index < ~1).  
+- Prefer **REML** over GCV for smoother, more stable fits in many practical settings.  
+- Always validate: smooth fit $\neq$ good residuals—check both.
+
+:::
+
+```{r}
+#| label: B1-gam-student
+#| echo: true
+# Fill in the blanks (___) and then set eval: true to run
+# Goal: Fit a GAM with a cubic regression spline and inspect diagnostics
+
+# 1) Fit the model (use REML for smoothing selection)
+m_gam <- gam(Sources ~ s(Depth, bs = "cr"), data = dat, method = "REML")
+
+# 2) Summarise: check edf, significance of s(), adjusted R^2, and REML score
+summary(m_gam)
+
+# 3) Diagnostics: residual patterns and k-index
+par(mfrow = c(2, 2))
+gam.check(m_gam)
+par(mfrow = c(1, 1))
+```
+
+::: {.alert .alert-success}
+**Question**
+
+* **Shape check:** What does the fitted smooth suggest about how `Sources` changes with `Depth` (e.g., monotonic, hump-shaped, thresholds)? 
+*threshold at around depth of 3000*
+* **Complexity:** What is the reported **edf**, and how would you interpret that value in plain language?  
+*8.52 - the smooth is quite flexible (would be 1 if it is linear)*
+* **Adequacy:** Does `gam.check()` indicate any **patterned residuals** or **basis inadequacy** (k-index warnings)? If yes, what would you try next?  
+*k-index is 1.04 meaning no warning (if <1, may need more basis functions). residuals are likely okay (no major pattern from k-check), high p-value (0.58)*
+* **Comparative lens:** In what ways would a polynomial of degree 4–6 likely behave differently at the **edges** of the `Depth` range (Runge-type behaviour)?  
+*...*
+:::
+
+::: {.alert .alert-info}
+**Task B2 — Plot the GAM on the response scale with uncertainty**
+
+**What you’ll do (and why):**
+
+- **Purpose:** Turn the fitted GAM into an interpretable plot on the **response scale**, so students see predicted *Sources* against *Depth* in real units.
+- **Prediction grid:** Create a fine, evenly spaced depth grid to avoid jagged lines from irregular sampling.
+- **Uncertainty:** Use `predict(..., se.fit = TRUE, type = "response")` to obtain fitted values and their **standard errors** on the response scale. Add a ribbon for an approximate **95% pointwise interval** using `fit ± 2 * se.fit`.
+- **Visual clarity:** Overlay the fitted line and ribbon on the raw data to contrast modelled trend vs. observed scatter.
+
+**Key ideas:**
+- `type = "response"` ensures predictions are on the scale of *Sources* (not the link/linear predictor).
+- The ribbon is **pointwise**, not simultaneous; it’s excellent for teaching uncertainty, but do not over-interpret it as a joint interval over the whole curve.
+- Dense grids (e.g., 300–500 points) give smooth lines without oversmoothing the model itself.
+:::
+
+```{r}
+#| label: B2-plot-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Plot the GAM fit on the response scale with ~95% pointwise intervals
+
+# 1) Create a prediction grid over Depth
+newd <- tibble(Depth = seq(min(dat$Depth), max(dat$Depth), length.out = 400))
+
+# 2) Predict on the response scale with standard errors
+pred_gam <- bind_cols(
+  newd,
+  as_tibble(predict(m_gam, newd, se.fit = TRUE, type = "response"))
+)
+
+# 3) Plot: points, fitted line, and ribbon for uncertainty
+ggplot(dat, aes(Depth, Sources)) +
+  geom_point(alpha = 0.5) +
+  geom_line(data = pred_gam, aes(y = fit), linewidth = 1) +
+  geom_ribbon(data = pred_gam,
+              aes(y = fit,
+                  ymin = fit - 2*se.fit,
+                  ymax = fit + 2*se.fit),
+              alpha = 0.2) +
+  labs(title = "GAM fit: cubic regression spline (mgcv::gam)",
+       subtitle = "Line = fitted; band ~95% pointwise interval",
+       y = "Sources") +
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+**Questions**
+
+* **Scale check:** Why is `type = "response"` preferable here compared to `type = "link"`?
+*type = "link" gives predictions on the linear predictor scale. type = "response" gives predictions on the original response scale, which is what your data actually are.*
+* **Uncertainty:** What does the shaded band represent, and where does it widen most? Why might that be?  
+*uncertainty, when increases and in the end where it fluctuates up and down*
+* **Edge behaviour:** Do you see wider intervals near minimum/maximum depth? How does sampling density play a role?  
+*yes, maximum depth - plays a large role as uncertainty increases with lower sampling density*
+* **Interpretation:** Identify depth ranges where the fitted curve rises, plateaus, or falls. How would a straight-line model mislead here?
+*I have already answered this* 
+:::
+
+
+::: {.alert .alert-info}
+**Task B3 — Compare GAM with polynomial regressions (degrees 2–6)**
+
+**What you’ll do (and why):**
+
+- **Purpose:** Fit a set of **global polynomial** regressions (degrees 2–6) and compare them with the GAM fit from Task B1–B2.  
+- **Focus:** Observe **Runge’s phenomenon** — polynomials can overshoot/oscillate (especially near boundaries) when trying to capture curved relationships.  
+- **Method:** For each degree, fit `lm(Sources ~ poly(Depth, degree, raw = TRUE))`, predict over the same grid `newd` used for the GAM, and collect fitted values/SEs.  
+- **Visual:** Overlay the polynomial fits on the raw data to compare shapes and **edge behaviour** with the GAM curve from B2.
+
+**Key ideas:**
+- **Global vs local flexibility:** Global polynomials force one equation to capture the entire curve; GAM smooths adapt locally with a penalty on wiggliness.  
+- **Edge effects:** Extrapolation/oscillation at the **depth extremes** is common with higher-degree polynomials (Runge-type behaviour).  
+- **Model selection:** AIC can be computed for each polynomial, but shape realism and diagnostics matter just as much as a single metric.
+
+:::
+
+```{r}
+#| label: B3-poly-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Fit polynomial regressions (degrees 2–6) and compare shapes to the GAM
+
+# 0) Ensure you have a prediction grid (from Task B2); if not, create it:
+# newd <- tibble(Depth = seq(min(___$___), max(___$___), length.out = ___))
+
+# 1) Choose degrees to compare
+deg_seq <- 2:6   # e.g., 2:6
+
+# 2) Fit polynomials, predict on 'newd', and collect results
+fits_poly <- map_df(deg_seq, ~{
+  fm   <- lm(Sources ~ poly(Depth, .x, raw = TRUE), data = dat)  
+  pred <- predict(fm, newd, se.fit = TRUE)                        
+  tibble(
+    Depth = newd$Depth,                                           
+    fit   = as.numeric(pred$fit),
+    se    = pred$se.fit,
+    deg   = paste0("poly d=", .x),
+    AIC   = AIC(fm)                                               
+  )
+})
+
+# 3) Plot: raw data + polynomial fits
+ggplot(dat, aes(Depth, Sources)) +
+  geom_point(alpha = 0.7) +
+  geom_line(data = fits_poly, aes(y = fit, colour = deg), linewidth = 0.7) +
+  labs(title = "Polynomial fits of increasing degree",
+       subtitle = "Watch for overshoot/oscillation at the edges (Runge-like behaviour)",
+       colour = NULL) +
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+**Questions**
+
+* **Overshoot zones:** At which depth ranges do the higher-degree polynomials deviate most from the data (overshoot/oscillation)?  
+*deep depths*
+* **Edge stability:** How does the **GAM** behave at shallowest/deepest depths compared with polynomials of degree ≥ 4?
+*at shallow depths, the gam has a hump, which is not seen in the polynomials of degree ≥ 4*
+* **Parsimony vs realism:** If a degree-5 polynomial shows a slightly lower AIC than degree-3, would you still prefer the GAM? Why?  
+*likely still prefer the GAM because. GAMs are more realistic as they fit curves locally, avoiding unrealistic wiggles at the edges. Polynomials can overfit,  high-degree polynomials may bend too much, capturing noise rather than true patterns. GAMs produce smoother, easier-to-understand relationships. Small AIC gains from high-degree polynomials usually aren’t worth the risk of overfitting.*
+* **Prediction risk:** What practical risks arise if stakeholders act on edge-unstable predictions (e.g., setting thresholds at range limits)?
+:::
+
+## Part C — How GAMs work (inner workings, lightly) (10 min)
+
+:::: {.alert .alert-info}
+
+**Task C1 (concept).**
+
+In `mgcv`, $f(x)$ is built from spline **basis functions** with a smoothness penalty ($\lambda$).
+
+Optimal $\lambda$ is estimated by REML or GCV; larger $\lambda \Rightarrow$ smoother curve. **edf** (in `summary()`) reflects the effective flexibility.
+:::
+
+
+::: {.alert .alert-info}
+**Task C2 (hands-on) — Vary the basis dimension `k` to confirm adequacy**
+
+**What you’ll do (and why):**
+
+- **Purpose:** Check whether the chosen spline **basis size** (`k`) is large enough to capture the signal without imposing an artificial ceiling on model flexibility.  
+- **How it works:** In `mgcv`, `k` sets the **maximum** complexity of the smooth; the model then estimates the **effective degrees of freedom (edf)** via REML/GCV. Typically, `edf ≤ k - 1` for cubic regression splines.  
+- **Underspecification risk:** If `k` is too small, the smoother may be **forced** to be too simple even if the penalty would allow more wiggle—this leads to biased fits.  
+- **Diagnostics:** Use `gam.check()`’s **k-index** test. Warnings (low k-index and small p-values) suggest increasing `k` and refitting. If increasing `k` does **not** change the fitted curve or edf materially, the smaller `k` is sufficient.  
+- **Practical tip:** Start modest (e.g., `k=10`), increase to a larger value (e.g., `k=30`), compare `edf`, AIC, and residual diagnostics. With REML, a **too-large** `k` is usually safe (penalty controls overfitting), but avoid excessively huge `k` for computation and concurvity stability.
+
+:::
+
+```{r}
+#| label: C2-k-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Compare k=10 vs k=30, inspect edf/AIC, and check k-index in gam.check()
+
+# 1) Fit two GAMs with different basis dimensions
+m_k10 <- gam(Sources ~ s(Depth, bs = "cr", k = 10), data = dat, method = "REML")
+m_k30 <- gam(Sources ~ s(Depth, bs = "cr", k = 30), data = dat, method = "REML")
+
+# 2) Compare model summaries (edf, R^2, etc.) at a glance
+bind_rows(
+  broom::glance(m_k10) %>% dplyr::mutate(model = "k=10"),
+  broom::glance(m_k30) %>% dplyr::mutate(model = "k=30")
+) %>%
+  dplyr::select(model, df = df.residual, AIC, deviance, r.squared = adj.r.squared) # AIC is lower for k30 and r.squared is also better
+
+# 3) Diagnostics: residual patterns & basis adequacy (k-index)
+par(mfrow = c(2, 2))
+gam.check(m_k10)
+par(mfrow = c(2, 2))
+gam.check(m_k30)
+par(mfrow = c(1, 1))
+
+# Optional (for visual comparison): overlay fitted curves
+newd <- tibble(Depth = seq(min(dat$Depth), max(dat$Depth), length.out = 400))
+pred10 <- dplyr::bind_cols(newd, as_tibble(predict(m_k10, newd, se.fit = TRUE, type = "response")))
+pred30 <- dplyr::bind_cols(newd, as_tibble(predict(m_k30, newd, se.fit = TRUE, type = "response")))
+ggplot(dat, aes(Depth, Sources)) +
+  geom_point(alpha = 0.5) +
+  geom_line(data = pred10, aes(y = fit), linewidth = 0.9, linetype = 2) +
+  geom_line(data = pred30, aes(y = fit), linewidth = 1)
+
+```
+
+
+::: {.alert .alert-success}
+**Questions**
+
+* **edf stability:** Do `edf` and the fitted curve change meaningfully when moving from `k=10` to `k=30`? What does that imply?  
+*Yes edf_k10=8.52 and edf_k30=12.9 - the larger edf the more flexibility/curving in smoother*
+* **k-index check:** Does `gam.check()` flag basis inadequacy (k-index test)? If yes, what new `k` would you try next, and why?  
+*k=1.34 so I don't have to increase k (close to 1, there is room to wiggle)*
+* **Parsimony vs safety:** Given similar fits, which `k` would you keep for subsequent analyses, and what’s your rationale?  
+*AIC and r^2 and edf => k30.*
+* **Computational trade-offs:** When might an unnecessarily large `k` become problematic, even if REML penalisation keeps the curve smooth?
+*Larger k -> slower fitting, more memory use. Especially an issue with large datasets or multiple smooths. can also be more difficult to interpret with lots of fitted noise*
+:::
+
+## Part D — GAMs vs GLMs (what changes?) (10 min)
+
+::: {.alert .alert-info}
+**Task D1 — Fit a GLM (Gaussian identity) and compare with the GAM**
+
+**What you’ll do (and why):**
+
+- **Baseline model:** Fit a **GLM with Gaussian errors and identity link**: `Sources ~ Depth`. This is the linear benchmark against which we compare the GAM.  
+- **Model comparison:** Use **AIC** to compare `m_glm` vs `m_gam`. Lower AIC indicates a better trade-off between fit and complexity.  
+- **Diagnostics:** Inspect residuals of **both** models. Even with Gaussian errors, a linear mean structure can be misspecified if the *shape* is non-linear; GAMs can capture this via a smooth `s(Depth)`.  
+- **Takeaway:** A GAM can outperform a linear GLM under Gaussian errors when the **systematic component** (mean–covariate relation) is curved.
+
+**Practical tips:**
+- A lower AIC for the GAM alongside cleaner residuals supports non-linearity in the mean.  
+- If AICs are close, prioritise **diagnostics** and **interpretability** (edge behaviour, residual structure).  
+:::
+
+```{r}
+#| label: D1-glm-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Fit a Gaussian-identity GLM and compare with the GAM via AIC; inspect residuals.
+
+# 1) Fit the baseline GLM (linear mean)
+m_glm <- glm(Sources ~ Depth, data = dat, family = gaussian())
+
+# 2) Compare to GAM via AIC (lower = better)
+AIC(m_glm, m_gam) # gam is best
+
+# 3) Quick residual diagnostics (GLM): residuals–fitted and QQ
+par(mfrow = c(1, 2))
+plot(fitted(m_glm), residuals(m_glm), main = "GLM: Residuals vs Fitted",
+     xlab = "Fitted", ylab = "Residuals"); abline(h = 0, lty = 2)
+qqnorm(residuals(m_glm), main = "GLM: Normal Q-Q"); qqline(residuals(m_glm))
+par(mfrow = c(1, 1))
+
+# 4) (Optional) Re-run GAM diagnostics here for side-by-side judgement
+par(mfrow = c(2, 2)); gam.check(m_gam); par(mfrow = c(1, 1))
+```
+
+:: {.alert .alert-success}
+**Questions**
+
+* **AIC verdict:** Which model has the lower AIC? Is the difference large enough to be compelling (> ~2–4)?  
+*gam - yes 100 in difference*
+* **Residual patterns:** Do you see curvature in **GLM** residuals vs fitted values that disappears in the **GAM**?  
+*yup (the V-shape)*
+* **Model misspecification:** Why can a linear GLM be inadequate even if Gaussian error assumptions roughly hold?  
+*Gaussian residuals alone don’t guarantee a good model. if the mean-response relationship is non-linear, a linear GLM wills misfit the data.*
+* **Communication:** How would you explain to stakeholders why a smooth (GAM) is preferable here over a straight line?
+:::
+
+## Part E — Model fit & selection (15 min)
+
+
+::: {.alert .alert-info}
+**Task E1 — Compare alternative GAMs: different bases and smoothness criteria**
+
+**What you’ll do (and why):**
+
+- **Purpose:** To explore how GAM fits depend on the **choice of spline basis** and the **method for smoothing parameter estimation**.  
+- **Spline bases compared:**
+  - `"cr"` = **cubic regression spline** — efficient and common default.  
+  - `"tp"` = **thin plate regression spline** — more flexible, recommended when smoothness complexity is unknown.  
+  - `"cs"` = **cubic regression spline with shrinkage** — like `"cr"`, but allows the smoother to shrink towards 0 if unsupported by data (useful in model selection).  
+- **Smoothing selection methods:**
+  - **REML (Restricted Maximum Likelihood):** generally more stable and conservative.  
+  - **GCV.Cp (Generalised Cross Validation):** can be faster but sometimes under-smooths.  
+- **Approach:** Fit three models with the same data but different combinations of basis and smoothing method, then compare them using **AIC**.  
+
+**Key message:** If the AIC values and fitted curves are similar, the choice of basis/method is less critical. Differences may matter in small samples or when doing **variable selection**.
+
+:::
+
+
+```{r}
+#| label: E1-compare-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Compare GAMs with different spline bases and smoothing selection criteria
+
+# 1) Fit GAMs with different bases and methods
+# Fit three GAMs with different bases/methods
+# Cubic regression spline with REML smoothing parameter selection
+m_cr_reml <- gam(Sources ~ s(Depth, bs = "cr"), data = dat, method = "REML")
+# Thin plate regression spline with GCV.Cp smoothing parameter selection  
+m_tp_gcv  <- gam(Sources ~ s(Depth, bs = "tp"), data = dat, method = "GCV.Cp")
+# Cubic regression spline with shrinkage and REML smoothing parameter selection
+m_cs_reml <- gam(Sources ~ s(Depth, bs = "cs"), data = dat, method = "REML")   # cubic shrinkage
+
+# 2) Compare the models using AIC
+AIC(m_cr_reml, m_tp_gcv, m_cs_reml) # cp and cr are better than tp - parsimony chooses cubic regression (less complex)
+
+```
+
+::: {.alert .alert-info}
+**Task E2 — Diagnostics and concurvity**
+
+**What you’ll do (and why):**
+
+- **Residual diagnostics:** Use `gam.check()` to assess whether the model assumptions hold. This produces:  
+  - Residuals vs fitted values (should show no clear pattern).  
+  - Q-Q plot of residuals (should be close to the line if residuals are Gaussian).  
+  - Scale–location plot (homogeneity of variance).  
+  - Histogram of residuals.  
+  - **k-index test** for basis dimension adequacy (low k-index suggests `k` may be too small).  
+- **Concurvity diagnostics:** Use `concurvity()` to check for strong correlations between smooth terms.  
+  - Concurvity is like multicollinearity but for smooths.  
+  - Values close to 1 indicate redundancy between smooths, which can make interpretation unstable.  
+  - With only one smooth term (as in this example), concurvity isn’t a problem but running it introduces the concept for when you add more predictors.  
+
+**Key message:** A GAM is only trustworthy if residual diagnostics look reasonable and concurvity is low. Always validate your model fit before interpreting smooths.
+
+**Decision prompt.** Pick a “best” model using AIC + diagnostics + interpretability. State your choice and why (method, edf, residuals).
+:::
+
+```{r}
+##| label: E2-diag-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Run model diagnostics (gam.check) and assess concurvity
+
+# 1) Residual diagnostics for the chosen model
+gam.check(m_cr_reml)
+
+# 2) Concurvity assessment (more relevant with multiple smooths)
+concurvity(m_cr_reml, full = TRUE)
+
+# (add-on) — Visual residuals–fitted overlay with ggplot2**
+## **What you’ll do (and why):**
+## - Create a tidy data frame of **fitted values** (on the response scale) and **Pearson residuals** from your chosen GAM (e.g. `m_cr_reml`).
+## - Plot **residuals vs fitted** using `ggplot2`, add a **zero reference line**, and a light **LOESS trend** to spot structure.
+## - This complements `gam.check()` with a modern diagnostic visual and makes it easy to layer aesthetics if needed (e.g., colour by a factor).
+# Goal: Build a ggplot residuals–fitted overlay for your chosen GAM (e.g., m_cr_reml)
+# 1) Create a small diagnostics tibble with fitted values and Pearson residuals
+diag_df <- tibble(
+ fitted = fitted(m_cr_reml, type = "response"),
+ resid  = residuals(m_cr_reml, type = "pearson")
+)
+
+# 2) Plot residuals vs fitted with a LOESS guide
+ggplot(diag_df, aes(x = fitted, y = resid)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_point(alpha = 0.5) +                         
+  geom_smooth(method = "loess", se = FALSE, span = 0.8) +
+  labs(title = "Residuals vs Fitted (GAM)",
+       x = "Fitted values",
+       y = "Pearson residuals") +
+  theme_minimal()
+```
+
+
+::: {.alert .alert-success}
+**Questions**
+
+* **Residuals:** Do the residual plots suggest non-linearity, heteroscedasticity, or non-normality?  
+*slight non-linearity (small systematic curve remains and heteroscedasticity (variance increases at high fitted value). Mostly okay normality, a few outliers*
+
+* **k-index:** Does `gam.check()` suggest that the basis size `k` was adequate? If not, what would you try next?  
+*yup, kindex~1*
+* **Concurvity:** Why is concurvity not an issue here, but critical when you have multiple smooth terms?  
+
+* **Practice:** How would high concurvity affect your interpretation of a GAM with two correlated covariates?  
+:::
+
+
+## Part F — Beyond a single station: Station effect + one smooth (15 min)
+
+
+::: {.alert .alert-info}
+**Task F1 — Two-station example with a shared smooth and a station shift**
+
+**What you’ll do (and why):**
+
+- **Purpose:** Combine Stations **8** and **13** and model a **common depth effect** via a single smooth `s(Depth)` while allowing a **parametric shift** between stations (an intercept difference via `+ Station`).  
+- **Depth overlap:** Restrict both stations to the **shared depth range** so that the common smooth isn’t biased by non-overlapping extremes (a classic source of spurious differences).  
+- **Model:** `Sources ~ s(Depth, bs="cr") + Station` with **REML** smoothing selection.  
+- **Inference:** Use `summary()` and `anova()` to assess:  
+  - the **shape and significance** of `s(Depth)` (edf, F, p)  
+  - whether **Station** has a significant **offset** (parametric coefficient)  
+
+**Key idea:** This tests whether stations differ mainly by a **level shift** while **sharing the same curve shape** with depth. If the offset is insufficient (i.e., shapes appear different), move to **by-smooths** in Task F2 (e.g., `s(Depth, by = Station) + Station`).
+:::
+
+```{r}
+#| label: F1-two-stations-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Fit a GAM with a shared smooth over Depth and a parametric Station shift
+
+# 1) Subset Stations 8 and 13; keep key variables
+d2 <- ISIT |>
+  dplyr::filter(Station %in% c(8, 13)) |>
+  dplyr::transmute(Station = factor(Station),
+                   Depth   = SampleDepth,
+                   Sources = Sources)
+
+# 2) Restrict to shared Depth overlap
+rng <- d2 |>
+  dplyr::group_by(Station) |>
+  dplyr::summarise(mn = min(Depth), mx = max(Depth), .groups = "drop")
+hi  <- max(rng$mx); lo <- min(rng$mn)
+d2o <- d2 |>
+  dplyr::filter(Depth > lo, Depth < hi)
+
+# 3) Fit shared-smooth + station-offset model
+m_two <- mgcv::gam(Sources ~ s(Depth, bs = "cr") + Station, data = d2o, method = "REML")
+
+# 4) Inspect results
+summary(m_two)
+anova(m_two)
+
+```
+
+::: {.alert .alert-success}
+**Questions**
+
+* **Offset vs shape:** Does the station effect look like a **constant shift** across depths, or do you suspect **shape differences**?  
+* **Shared range:** How might failing to restrict to the **common depth range** distort conclusions?  
+* **Evidence:** What do the **edf** and p-values for `s(Depth)` suggest about non-linearity?  
+* **Next step:** If the station offset is significant but residual plots show structure by station, what model term would you add next (and why)?
+:::
+
+::: {.alert .alert-info}
+**Task F2 — Plot the common smooth with a station offset**
+
+**What you’ll do (and why):**
+- **Purpose:** Visualise the fitted **shared smooth over Depth** with a **station-specific intercept shift** from **Task F1**. This lets you see whether a single curve shape plus a vertical offset captures both stations adequately.  
+- **Prediction grid:** Build a tidy grid over the **common depth range** (`d2o`) for **each station** so the offset appears as parallel curves with identical shapes.  
+- **Uncertainty:** Use `predict(..., se.fit = TRUE, type = "response")` to obtain fitted values and pointwise SEs on the **response scale**. Plot ribbons as ~95% intervals (`fit ± 2*se.fit`).  
+- **Visual cues:** Scatter the raw data by station, overlay the station-wise fitted lines, and add ribbons to compare fit quality across stations and depths.
+
+**Key idea:** If the curves appear **parallel** (same shape, vertical shift), the shared-smooth + station-offset model is appropriate. If shapes visibly diverge, consider **by-smooths** (`s(Depth, by = Station) + Station`).
+:::
+
+
+```{r}
+#| label: F2-plot-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Plot the common smooth + station offset with uncertainty bands
+
+# 1) Build a prediction grid over the common depth range for each station
+new2 <- tidyr::expand_grid(
+  Depth   = seq(min(d2o$Depth), max(d2o$Depth), length.out = 400),
+  Station = levels(d2o$Station)
+)
+
+# 2) Predict on the response scale with standard errors
+p2 <- dplyr::bind_cols(
+  new2,
+  as_tibble(predict(m_two, new2, se.fit = TRUE, type = "response"))
+)
+
+# 3) Plot raw data + fitted lines + ribbons
+ggplot(d2o, aes(Depth, Sources, colour = Station)) +
+  geom_point(alpha = 0.5) +
+  geom_line(data = p2, aes(y = fit)) +
+  geom_ribbon(data = p2,
+              aes(y = fit, 
+                  ymin = fit - 2*se.fit,
+                  ymax = fit + 2*se.fit,
+                  fill = Station),
+              alpha = 0.15, colour = NA) +
+  labs(title = "GAM with shared smooth and station shift",
+       subtitle = "Model: s(Depth) + Station") +
+  theme_minimal() +
+  guides(fill = "none")
+```
+
+::: {.alert .alert-success}
+**Questions**
+
+* **Parallelism:** Do the two fitted lines look **parallel** across the depth range? If not, where do they diverge most?  
+* **Uncertainty:** Where are the ribbons widest? Is that due to sparse data or genuine variability?  
+* **Fit adequacy:** Are there systematic zones where one station’s data consistently sits above/below the fitted line?  
+* **Next model:** If shapes differ, how would **by-smooths** change the specification and interpretation?
+:::
+
+## Part G — Expanding GAMs: Beyond Gaussian (10 min)
+
+::: {.alert .alert-info}
+**Task G1 — Count responses: Poisson vs Negative Binomial GAMs + overdispersion check**
+
+**What you’ll do (and why):**
+- **Motivation:** `Sources` are non-negative counts. Gaussian GAMs can fit the mean curve but ignore count-like mean–variance structure.  
+- **Families:**  
+  - **Poisson**: \(\mathbb{E}[Y]=\mu\), \(\mathrm{Var}(Y)=\mu\) (equidispersion).  
+  - **Negative Binomial (NB)**: \(\mathrm{Var}(Y)=\mu + \mu^2/\theta\) (extra-Poisson/overdispersion handled by \(\theta\)).  
+- **Approach:** Fit `Poisson` and `NB` GAMs with the same smoother as before, compare **AIC**, and check **overdispersion** (Poisson).  
+- **Overdispersion rule of thumb:** If \(\text{ratio} = \frac{\text{residual deviance}}{\text{df residual}} \gtrsim 1.5\!-\!2\), Poisson is likely too restrictive → prefer **NB**.  
+- **Outcome:** You’ll decide whether a count family yields better fit/diagnostics than the Gaussian GAM.
+
+**Notes:**  
+- `type="response"` predictions keep the plot in data units.  
+- With counts and small means, consider using **Pearson** residuals for checks.
+:::
+
+```{r}
+# Round the Sources to force a count
+#| label: G1-counts-student
+#| echo: true
+#fill in the blanks (___) and then set eval: true to run
+# Goal: Fit Poisson and NB GAMs for count data, compare AIC, and check overdispersion
+
+
+# Round the Sources to force a count
+dat$rnd.Sources <- round(dat$Sources)
+# 1) Fit count-family GAMs with the same smoother used before
+m_pois <- mgcv::gam(rnd.Sources ~ s(Depth, bs = "cr"), data = dat, family = poisson(), method = "REML")
+m_nb   <- mgcv::gam(Sources ~ s(Depth, bs = "cr"), data = dat, family = nb(),    method = "REML")
+
+# 2) Compare AICs (Gaussian vs Poisson vs NB)
+AIC(m_gam, m_pois, m_nb) #poisson has lowest
+
+# 3) Quick Poisson overdispersion checks
+# (a) Residual deviance / df
+with(broom::glance(m_pois), deviance / df.residual) # overdispersion if between 1.5-2 (0.7 is fine - it indicates mild underdispersion, which usually isn’t a big concern) - fine if ~1
+
+# (b) Pearson chi-square / df (often more informative)
+chi_phi <- sum(residuals(m_pois, type = "pearson")^2) / df.residual(m_pois)
+chi_phi # 0.58 -  Value ≈ 1 → model fits well, no overdispersion.
+#                 Value >> 1 → overdispersion (variance larger than expected)
+#                 Value << 1 → underdispersion (variance smaller than expected)
+# mine is a bit underdispersed, meaning that data is slightly less variable than the Poisson assumption predicts, which is not as big as a problem as overdispersions
+
+# OPTIONAL: Visual residuals–fitted overlay for NB model
+diag_nb <- tibble(fitted = fitted(m_nb, type = "response"),
+                  resid  = residuals(m_nb, type = "pearson"))
+ggplot(diag_nb, aes(fitted, resid)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE, span = 0.8) +
+  labs(title = "Residuals vs Fitted (NB GAM)",
+       x = "Fitted (response scale)", y = "Pearson residuals") +
+  theme_minimal()
+```
+
+::: {.alert .alert-success}
+**Questions**
+
+* **AIC & diagnostics:** Do Poisson/NB improve AIC versus the Gaussian GAM? What happens to residual patterns?  
+*yes* 
+* **Dispersion:** What is the Poisson dispersion ratio? If high, how does NB change the picture?  
+*overdispersion if between 1.5-2 (0.7 is fine - it indicates mild underdispersion, which usually isn’t a big concern) - fine if ~1*
+* **Interpretation:** How do you explain (to non-statisticians) the practical difference between **GAM (Gaussian)** and **GAM (Poisson/NB)** for these data?  
+* **Next steps:** If NB still shows structure, what else might you try (offsets, additional covariates, alternative links, zero-inflation, etc.)?
+:::
+
+
+## Summary of the Practical
+
+This practical introduced students to the use of Generalised Additive Models (GAMs) through the bioluminescence depth dataset. We began by visualising raw data at single stations, highlighting the inadequacy of linear fits and motivating the need for flexible smoothers. By fitting cubic regression splines in mgcv::gam, students explored the principle of replacing fixed parametric terms with smooth functions to capture non-linear relationships.
+
+We contrasted GAMs with polynomial regressions, which can mimic non-linearity but suffer from instability at range edges (Runge’s phenomenon). This emphasised why GAMs are preferable: they avoid oscillations, allow local flexibility, and are regularised through penalisation. The role of the basis dimension (k) and smoothing parameter (λ) was examined, with diagnostic tools (gam.check, residual plots, k-index) showing how to assess adequacy and avoid under/over-smoothing.
+
+We extended the models by comparing different spline bases (cubic regression, thin-plate, shrinkage) and smoothness criteria (REML, GCV). Students practised evaluating model fit with AIC and concurvity checks, reinforcing that GAMs retain the statistical rigour of GLMs while offering flexibility. A comparison between GLMs and GAMs (Gaussian identity) demonstrated why GAMs often outperform when relationships are non-linear, even with the same error family.
+
+Building complexity, we modelled multiple stations with shared smooths and parametric shifts, and discussed when by-smooths are preferable. Finally, the practical illustrated GAMs beyond Gaussian responses, fitting Poisson and Negative Binomial GAMs to count data, and highlighting the importance of overdispersion checks.
+
+Overall, the session showed that GAMs form a natural extension of regression models:
+
+- From a single smoother (non-linear regression replacement),
+- Through diagnostics and model selection,
+- To flexible multi-station and non-Gaussian applications.
+
+::: {.callout-note}
+
+**Key Take-Home Points**
+* GAMs extend GLMs by allowing smooth, data-driven functional forms for predictors.
+* Polynomials $\neq$ smoothers: GAMs avoid Runge’s phenomenon and handle local variation better.
+* Diagnostics matter: always check gam.check, AIC, and concurvity before trusting results.
+* Flexible families: GAMs work with Gaussian, Poisson, binomial, NB, and beyond.
+* Interpretation: Smooth terms represent shapes, not single coefficients — describe curves, not slopes.
+:::
